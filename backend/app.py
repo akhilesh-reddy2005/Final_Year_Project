@@ -1,10 +1,10 @@
-"""Flask web dashboard, live hybrid scoring API, and vigilance feedback loop backed by MongoDB."""
+"""Pure Flask REST API backend for Karnataka ESCOM Theft Risk Monitor."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, request
 import joblib
 import numpy as np
 import shap
@@ -124,6 +124,16 @@ HYBRID_BUNDLE, EXPLAINER = load_hybrid_bundle()
 PEER_LOOKUP = get_peer_medians()
 
 
+@app.after_request
+def add_cors_headers(response):
+    """Allow Vite dev server (localhost:5173) to call Flask API routes cleanly."""
+    if request.path.startswith("/api/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
+
 def score_live_features(feature_values: dict[str, float]) -> tuple[int, str, dict[str, float]]:
     """Score 8 behavioral features using the hybrid IsolationForest + RandomForest ensemble."""
     X_raw = np.array([[feature_values[col] for col in FEATURE_COLUMNS]], dtype=float)
@@ -153,8 +163,35 @@ def score_live_features(feature_values: dict[str, float]) -> tuple[int, str, dic
 
 
 @app.route("/", methods=["GET"])
-def index():
-    """Render the Theft Risk Monitor dashboard from MongoDB."""
+def api_root():
+    """Return REST API metadata and available endpoints."""
+    return jsonify(
+        {
+            "service": "BESCOM GridGuard AI Backend API",
+            "status": "running",
+            "endpoints": [
+                "GET /api/health",
+                "GET /api/dashboard",
+                "GET /api/consumers",
+                "GET /api/consumer/<consumer_id>",
+                "POST /api/predict_reading",
+                "POST /api/add_consumer",
+                "POST /api/verify_inspection",
+                "POST /api/retrain",
+            ],
+        }
+    )
+
+
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    """Verify MongoDB connectivity and loaded model readiness."""
+    return jsonify({"status": "ok", "mongodb": ping_db()})
+
+
+@app.route("/api/dashboard", methods=["GET"])
+def get_dashboard_data():
+    """Return filtered consumers, KPIs, model metrics, and zone analytics for React."""
     db_zones, db_categories = get_distinct_zones_and_categories()
     zones = sorted(set(AREA_ZONES).union(db_zones))
     categories = sorted(set(CATEGORIES).union(db_categories))
@@ -180,21 +217,22 @@ def index():
     next_consumer_id = get_next_consumer_id()
     zone_analytics = get_zone_tariff_analytics()
 
-    return render_template(
-        "index.html",
-        zones=zones,
-        categories=categories,
-        selected_zone=selected_zone,
-        selected_category=selected_category,
-        selected_status=selected_status,
-        status_options=STATUS_OPTIONS,
-        kpis=kpis,
-        rows=rows,
-        total_matching=total_matching,
-        seed_consumer_ids=seed_ids,
-        next_consumer_id=next_consumer_id,
-        model_metrics=HYBRID_BUNDLE.get("metrics", {}),
-        zone_analytics=zone_analytics,
+    return jsonify(
+        {
+            "zones": zones,
+            "categories": categories,
+            "status_options": STATUS_OPTIONS,
+            "selected_zone": selected_zone,
+            "selected_category": selected_category,
+            "selected_status": selected_status,
+            "kpis": kpis,
+            "rows": rows,
+            "total_matching": total_matching,
+            "seed_consumer_ids": seed_ids,
+            "next_consumer_id": next_consumer_id,
+            "model_metrics": HYBRID_BUNDLE.get("metrics", {}),
+            "zone_analytics": zone_analytics,
+        }
     )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+from pathlib import Path
 import re
 from typing import Any
 from dotenv import load_dotenv
@@ -12,7 +13,9 @@ from pymongo import ASCENDING, DESCENDING, MongoClient, UpdateOne
 from pymongo.database import Database
 
 
-load_dotenv(override=True)
+_BACKEND_ENV = Path(__file__).resolve().parent / ".env"
+_ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_BACKEND_ENV if _BACKEND_ENV.exists() else _ROOT_ENV, override=True)
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = "electricity_theft_db"

@@ -1,0 +1,322 @@
+================================================================================
+BESCOM GRIDGUARD AI — COMPLETE PROJECT DOCUMENTATION
+AI-Based Electricity Consumption Anomaly Detection & Theft Risk Assessment System
+Tailored for Karnataka ESCOMs (BESCOM, MESCOM, HESCOM, CESC, GESCOM)
+================================================================================
+
+1. PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+BESCOM GridGuard AI is a full-stack machine learning and vigilance operations
+platform built to detect non-technical losses (electricity theft, meter
+tampering, and bypass anomalies) across Karnataka's five Electricity Supply
+Companies (ESCOMs):
+
+  - BESCOM : BESCOM - Bengaluru South, BESCOM - Bengaluru East
+  - MESCOM : MESCOM - Mangaluru
+  - HESCOM : HESCOM - Hubballi
+  - CESC   : CESC - Mysuru
+  - GESCOM : GESCOM - Kalaburagi
+
+The system combines:
+  1. Unsupervised anomaly detection (Isolation Forest)
+  2. Supervised classification (Random Forest Classifier)
+  3. Explainable AI (SHAP TreeExplainer)
+  4. Cloud database persistence (MongoDB Atlas via pymongo)
+  5. Decoupled Backend REST API (Flask in backend/)
+  6. Decoupled Frontend SPA (React + Vite + Tailwind CSS in frontend/)
+  7. Field Vigilance Feedback Loop (Confirm Theft / False Alarm -> Retrain)
+
+
+2. SYSTEM ARCHITECTURE & DATA FLOW
+--------------------------------------------------------------------------------
+  [Raw CSV: electricity_bill_dataset.csv]
+       |
+       v  (backend/prepare_data.py: Clean + Engineer 8 Behavioral Features)
+  [MongoDB Atlas: electricity_theft_db.consumers (45,345 documents)]
+       |
+       v  (backend/train.py: 20% Holdout Eval + Hybrid IF/RF + SHAP)
+  [backend/models/hybrid_models.pkl]  +  [Bulk Update Risk Scores & SHAP in DB]
+       |
+       v  (backend/database.py <-> backend/app.py on http://127.0.0.1:5000)
+  [Flask REST API Endpoints (/api/dashboard, /api/consumer, /api/predict_reading,
+   /api/add_consumer, /api/verify_inspection, /api/retrain)]
+       |
+       v  (HTTP JSON / Vite Proxy /api -> 127.0.0.1:5000)
+  [React + Vite Frontend (http://localhost:5173)]
+       |-- Tab 1: Theft Risk Dashboard (KPIs, Filters, Queue, SHAP, Verification)
+       |-- Tab 2: Bill Collector Entry (Live Meter Reading Scoring)
+       |-- Header Actions: Quick Search, + Add Consumer Modal, Retrain Model
+
+
+3. REPOSITORY DIRECTORY STRUCTURE
+--------------------------------------------------------------------------------
+electricity-theft-detection/
+├── backend/
+│   ├── app.py                        # Pure Flask REST API (:5000)
+│   ├── database.py                   # MongoDB Atlas connection, indexes & CRUD
+│   ├── prepare_data.py               # 8-feature engineering & MongoDB seeding
+│   ├── train.py                      # Hybrid IF + RF training, eval & SHAP
+│   ├── requirements.txt              # Pinned Python dependencies
+│   ├── .env                          # Local MongoDB Atlas URI (gitignored)
+│   ├── .env.example                  # Environment variable template
+│   ├── electricity_bill_dataset.csv  # Raw dataset (45,345 rows x 12 columns)
+│   ├── data/                         # Intermediate CSV artifacts
+│   │   ├── engineered_consumers.csv
+│   │   └── scored_consumers.csv
+│   └── models/                       # Persisted ML artifacts
+│       ├── hybrid_models.pkl         # Production bundle (scaler, iso, rf, bounds, metrics)
+│       ├── iso_forest.pkl            # Standalone IsolationForest artifact
+│       ├── scaler.pkl                # Standalone StandardScaler artifact
+│       ├── score_bounds.json         # Standalone min/max score bounds
+│       └── shap_values.npy           # Standalone SHAP matrix
+├── frontend/
+│   ├── package.json                  # React, Vite, Tailwind, Plotly dependencies
+│   ├── vite.config.js                # Vite config + /api proxy to 127.0.0.1:5000
+│   ├── .env.example                  # Optional VITE_API_BASE_URL template
+│   ├── index.html                    # Root HTML shell for React SPA
+│   └── src/
+│       ├── main.jsx                  # ReactDOM entry point
+│       ├── index.css                 # Tailwind v4 import & scrollbar styling
+│       ├── api.js                    # Fetch wrappers for Flask REST endpoints
+│       ├── App.jsx                   # Header, search, 2-tab switcher, modals & toast
+│       └── components/
+│           ├── Dashboard.jsx         # KPIs, filters, ranked table, SHAP & verify
+│           ├── BillCollector.jsx     # Live field meter entry & risk verdict
+│           ├── ShapChart.jsx         # Reusable horizontal Plotly SHAP bar chart
+│           └── AddConsumerModal.jsx  # Modal to register & score new consumers
+├── .gitignore                        # Excludes .env, venv/, node_modules/, dist/
+├── README.md                         # Quickstart instructions
+├── PROJECT_DOCUMENTATION.txt         # This complete plain-text documentation
+└── venv/                             # Python 3.14 virtual environment
+
+
+4. TECH STACK & VERSIONS
+--------------------------------------------------------------------------------
+Backend (backend/requirements.txt, Python 3.14.10):
+  - Flask 3.1.3              : REST API framework & CORS headers
+  - pymongo 4.20.1           : MongoDB driver
+  - dnspython 2.9.2          : Required for mongodb+srv:// DNS resolution
+  - python-dotenv 1.2.4      : Loads MONGO_URI from backend/.env
+  - pandas 3.1.1             : Data cleaning & feature engineering
+  - numpy 2.5.5              : Numerical arrays & clipping
+  - scikit-learn 1.9.1       : StandardScaler, IsolationForest, RandomForestClassifier
+  - shap 0.54.1              : TreeExplainer feature attributions
+  - joblib 1.6.0             : Model serialization (hybrid_models.pkl)
+
+Frontend (frontend/package.json, Node.js v24.10.0):
+  - react ^19.1.0            : UI components & state
+  - react-dom ^19.1.0        : DOM rendering
+  - vite ^6.3.5              : Dev server, HMR & production bundler
+  - @vitejs/plugin-react     : React Fast Refresh & JSX transform
+  - tailwindcss ^4.1.7       : Utility-first styling (@tailwindcss/vite)
+  - plotly.js-dist-min ^2.35 : Interactive horizontal SHAP attribution charts
+  - lucide-react ^0.511.0    : Vector icons
+
+
+5. DATASET & 8 BEHAVIORAL FEATURES (backend/prepare_data.py)
+--------------------------------------------------------------------------------
+Raw Input Dataset:
+  - File  : backend/electricity_bill_dataset.csv
+  - Shape : 45,345 rows x 12 columns
+            (Fan, Refrigerator, AirConditioner, Television, Monitor, MotorPump,
+             Month, City, Company, MonthlyHours, TariffRate, ElectricityBill)
+  - Baseline column auto-detected: MonthlyHours
+  - Cleaning (clean_raw_dataset): 0 duplicates removed, 0 missing/invalid
+    removed, 45,345 rows retained.
+
+Metadata & Synthetic Tampering Simulation:
+  - consumer_id  : Sequential KA-10000 through KA-55344
+  - area_zone    : Uniformly distributed across the 6 Karnataka ESCOM zones
+  - category     : 85% LT-2a Residential, 15% LT-3 Commercial
+  - Normal (95%) : latest_kwh = avg_6m * clip(N(1.0, 0.08), 0.75, 1.25)
+                   std_dev = avg_6m * U(0.04, 0.12), ground_truth = 0
+  - Theft (5%)   : 2,267 consumers injected with 55%-85% sudden drop:
+                   latest_kwh = avg_6m * (1 - U(0.55, 0.85))
+                   std_dev = avg_6m * U(0.28, 0.50), ground_truth = 1
+
+The 8 Behavioral Features:
+  1. latest_kwh          : Current billing cycle consumption (kWh)
+  2. avg_6m              : 6-month historical baseline consumption (kWh)
+  3. pct_change_from_avg : (latest_kwh - avg_6m) / (avg_6m + 1e-5)
+  4. std_dev             : Historical consumption volatility (kWh)
+  5. z_score             : (latest_kwh - avg_6m) / (std_dev + 1.0)
+  6. peer_ratio          : latest_kwh / (peer_median + 1e-5) grouped by
+                           (area_zone, category)
+  7. sanctioned_load     : Estimated connected load (kW) from appliance counts
+                           (AirConditioner, MotorPump, Television, Refrigerator),
+                           avg_6m, and tariff boost (1.25x commercial), clipped
+                           to [1.0, 25.0] kW
+  8. load_utilization    : latest_kwh / (sanctioned_load * 720.0 + 1e-5)
+
+
+6. MONGODB DATABASE SCHEMA (backend/database.py)
+--------------------------------------------------------------------------------
+Database Name : electricity_theft_db
+URI Source    : MONGO_URI from backend/.env (with root .env fallback)
+
+Collections & Indexes:
+  1) consumers (45,345+ documents)
+     - Indexes:
+       * Unique index on consumer_id (ascending)
+       * Compound index on (area_zone: 1, status: 1, risk_score: -1)
+     - Fields: consumer_id, area_zone, category, sanctioned_load, avg_6m,
+               std_dev, latest_kwh, pct_change_from_avg, z_score, peer_ratio,
+               load_utilization, risk_score, status, ground_truth, shap_values
+
+  2) meter_readings
+     - Index: (consumer_id: 1, reading_date: -1)
+     - Fields: consumer_id, reading_date (UTC ISO-8601), units_kwh, risk_score,
+               status
+
+  3) inspections
+     - Index: (consumer_id: 1, inspected_at: -1)
+     - Fields: consumer_id, inspected_at (UTC ISO-8601), outcome
+               ("Confirmed Theft" or "False Alarm"), remarks
+
+Key CRUD Helpers in database.py:
+  - ping_db(), ensure_indexes(), seed_consumers()
+  - load_consumers_dataframe(), bulk_update_consumer_scores()
+  - query_consumers(zone, category, status, limit=500)
+  - get_zone_tariff_analytics()
+  - get_consumer_by_id(), search_consumer_ids(), get_next_consumer_id()
+  - get_peer_medians(), insert_consumer(), update_consumer_reading()
+  - log_meter_reading(), record_inspection(), get_latest_inspection()
+
+
+7. HYBRID ML & EXPLAINABLE AI PIPELINE (backend/train.py)
+--------------------------------------------------------------------------------
+Model Components:
+  1. StandardScaler across all 8 behavioral features
+  2. IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+     -> Inverted decision_function scores min-max normalized to 0-100
+  3. RandomForestClassifier(n_estimators=200, class_weight="balanced",
+                            random_state=42, n_jobs=-1)
+     -> Trained on records with non-null ground_truth (0 or 1)
+
+Blended Risk Score Formula:
+  risk_score = clip(round(0.4 * norm_iso_score + 0.6 * rf_theft_prob * 100), 0, 100)
+
+Status Thresholds (assign_status):
+  - Inspect   : risk_score >= 70
+  - Watchlist : 40 <= risk_score <= 69
+  - Normal    : risk_score < 40
+
+Explainability (shap.TreeExplainer):
+  - extract_theft_shap(explainer, X_scaled) extracts class-1 (Theft) SHAP values
+    from shap.TreeExplainer(rf_clf).
+  - Positive SHAP values push toward Theft; negative values push toward Normal.
+
+Observed 20% Stratified Holdout Evaluation (9,069 samples: 8,616 Normal, 453 Theft):
+  - Precision : 1.0000
+  - Recall    : 1.0000
+  - F1-Score  : 1.0000
+  - ROC-AUC   : 1.0000
+  (Note: Evaluated with StandardScaler fitted strictly on the 80% training split
+   to avoid data leakage. High metrics reflect synthetic 55%-85% theft drops;
+   real-world feedback updates via Confirm Theft / False Alarm refine future
+   retraining runs.)
+
+Observed MongoDB Status Distribution (45,345 consumers):
+  - Inspect   :  2,267 (5.00%)
+  - Watchlist :      1 (0.00%)
+  - Normal    : 43,077 (95.00%)
+
+
+8. BACKEND REST API REFERENCE (backend/app.py)
+--------------------------------------------------------------------------------
+CORS is enabled on all /api/* routes (Access-Control-Allow-Origin: *).
+
+  GET /
+    Returns API service metadata and available endpoint list.
+
+  GET /api/health
+    Returns {"status": "ok", "mongodb": true}.
+
+  GET /api/dashboard?zone=All&category=All&status=Flagged
+    Returns kpis (consumers_monitored, cases_flagged, high_risk,
+    verified_detections, total_inspections, flagged_pct, high_risk_pct),
+    top 500 ranked rows, total_matching, filter lists, seed_consumer_ids,
+    next_consumer_id, model_metrics, and zone_analytics.
+
+  GET /api/consumers?q=...
+    Returns up to 50 matching consumer_ids for autocomplete.
+
+  GET /api/consumer/<consumer_id>
+    Returns consumer metadata, risk_score, status, ground_truth,
+    latest_inspection, all 8 features, peer_stats, and shap_contributions
+    (returns HTTP 404 if not found).
+
+  POST /api/predict_reading
+    Body: {"consumer_id": "...", "units_used": <float>, "save_record": <bool>}
+    Recomputes all 8 features using smooth rolling std_dev:
+      std_dev = 0.7 * old_std + 0.3 * abs(units_used - avg_6m)
+    Scores via backend/models/hybrid_models.pkl, logs to meter_readings,
+    updates consumers if save_record=true, and returns live verdict + SHAP.
+
+  POST /api/add_consumer
+    Body: {"consumer_id": "<optional>", "area_zone": "...", "category": "...",
+           "baseline_kwh": <float>}
+    Auto-generates next KA-xxxxx ID if blank (400 if duplicate), scores all 8
+    features, inserts into consumers, and returns HTTP 201.
+
+  POST /api/verify_inspection
+    Body: {"consumer_id": "...", "outcome": "Confirmed Theft" | "False Alarm",
+           "remarks": "..."}
+    Inserts into inspections and updates ground_truth (1 or 0) in consumers.
+
+  POST /api/retrain
+    Calls train.run_training(), reloads HYBRID_BUNDLE, EXPLAINER, and
+    PEER_LOOKUP under MODEL_LOCK, and returns updated training metrics.
+
+
+9. FRONTEND COMPONENTS (frontend/src/)
+--------------------------------------------------------------------------------
+  - api.js            : Centralizes fetch calls using VITE_API_BASE_URL (or
+                        relative /api/* proxied by vite.config.js to :5000).
+  - App.jsx           : Top header (BESCOM GridGuard AI), Consumer ID search,
+                        + Add Consumer, Retrain Model, 2-tab navigation, toasts.
+  - Dashboard.jsx     : 4 KPI cards, Zone/Category/Status filters, ranked queue
+                        table, Case Explanation (SHAP) + Field Verification.
+  - BillCollector.jsx : Live meter entry form, verdict banner, 4 stat tiles,
+                        and live SHAP attribution chart.
+  - ShapChart.jsx     : Reusable Plotly.js horizontal bar chart (+ risk crimson,
+                        - normal emerald).
+  - AddConsumerModal.jsx : Modal form to register and score a new consumer.
+
+
+10. SETUP, RUN COMMANDS & TROUBLESHOOTING
+--------------------------------------------------------------------------------
+Prerequisites:
+  - Python 3.14 (venv/ in project root)
+  - Node.js 24+ and npm
+  - MongoDB Atlas cluster with Database User ("Read and write to any database")
+    and Network Access IP allowlist configured.
+
+Commands (run from project root: electricity-theft-detection\):
+  1. Verify MongoDB Atlas connectivity:
+     .\venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'backend'); from database import ping_db; print('Ping OK:', ping_db())"
+
+  2. Seed MongoDB consumers (first time or reset):
+     .\venv\Scripts\python.exe backend\prepare_data.py
+
+  3. Train Hybrid Ensemble & update MongoDB scores:
+     .\venv\Scripts\python.exe backend\train.py
+
+  4. Terminal 1 — Start Backend API (http://127.0.0.1:5000):
+     .\venv\Scripts\python.exe backend\app.py
+
+  5. Terminal 2 — Start React Frontend (http://localhost:5173):
+     cd frontend
+     npm install   (first time only)
+     npm run dev
+
+Troubleshooting:
+  - [SSL: TLSV1_ALERT_INTERNAL_ERROR]:
+    Your current public IP changed and is not in MongoDB Atlas Network Access.
+    Add your current IP or 0.0.0.0/0 in Atlas -> Security -> Network Access.
+  - bad auth : Authentication failed (code 8000):
+    Verify/reset the database user password in Atlas -> Security -> Database
+    Access and update MONGO_URI inside backend\.env.
+  - .\venv\Scripts\python.exe not found:
+    Run backend commands from the project root, not from inside backend\.
+================================================================================
